@@ -124,7 +124,11 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="clamav_agent.cpp" />
-    <ClCompile Include="ftp_cilent.cpp" />
+    <ClCompile Include="ftp_client.cpp" />
+    <ClCompile Include="ftp_clientMain.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="ftp_client.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

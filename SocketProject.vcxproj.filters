@@ -15,11 +15,19 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="ftp_cilent.cpp">
+    <ClCompile Include="ftp_client.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="clamav_agent.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ftp_clientMain.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="ftp_client.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
