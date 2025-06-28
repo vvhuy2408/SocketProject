@@ -123,7 +123,9 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="clamav_agent.cpp" />
+    <ClCompile Include="clamav_agent.cpp">
+      <LanguageStandard Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">stdcpp17</LanguageStandard>
+    </ClCompile>
     <ClCompile Include="ftp_client.cpp" />
     <ClCompile Include="ftp_clientMain.cpp" />
   </ItemGroup>
