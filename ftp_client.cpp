@@ -144,6 +144,212 @@ void handle_rename(FtpSession& session, const std::string& oldname, const std::s
     std::cout << "[Server] " << buffer;
 }
 
+// 2. Upload and download
+
+void handle_put(FtpSession& session, const std::string& localFile, const std::string& remoteFile) {
+    if (!session.connected) {
+        std::cout << "[Client] Not connected.\n";
+        return;
+    }
+
+    if (!scan_file_with_clamav(localFile)) {
+        std::cout << "[Client] File \"" << localFile << "\" is INFECTED. Upload aborted.\n";
+        return;
+    }
+
+    // Gửi PASV
+    send(session.controlSocket, "PASV\r\n", 6, 0);
+    char response[512];
+    int len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
+    response[len] = '\0';
+    std::cout << "[Server] " << response;
+
+    int h1, h2, h3, h4, p1, p2;
+    sscanf_s(response, "227 Entering Passive Mode (%d,%d,%d,%d,%d,%d)", &h1, &h2, &h3, &h4, &p1, &p2);
+    int port = p1 * 256 + p2;
+    std::string ip = std::to_string(h1) + "." + std::to_string(h2) + "." + std::to_string(h3) + "." + std::to_string(h4);
+
+    SOCKET dataSocket = socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in dataAddr{};
+    dataAddr.sin_family = AF_INET;
+    dataAddr.sin_port = htons(port);
+    inet_pton(AF_INET, ip.c_str(), &dataAddr.sin_addr);
+    connect(dataSocket, (sockaddr*)&dataAddr, sizeof(dataAddr));
+
+    std::string cmd = "STOR " + remoteFile + "\r\n";
+    send(session.controlSocket, cmd.c_str(), cmd.length(), 0);
+    len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
+    response[len] = '\0';
+    std::cout << "[Server] " << response;
+
+    std::ifstream file(localFile, std::ios::binary);
+    char buffer[4096];
+    while (file.read(buffer, sizeof(buffer))) {
+        sendAll(dataSocket, buffer, file.gcount());
+    }
+    if (file.gcount() > 0) {
+        sendAll(dataSocket, buffer, file.gcount());
+    }
+    file.close();
+    closesocket(dataSocket);
+
+    len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
+    response[len] = '\0';
+    std::cout << "[Server] " << response;
+}
+
+void handle_mput(FtpSession& session, const std::vector<std::string>& files) {
+    for (const auto& file : files) {
+        if (confirm_prompt(file)) {
+            handle_put(session, file, file);
+        }
+    }
+}
+
+void handle_get(FtpSession& session, const std::string& remoteFile, const std::string& localFile) {
+    if (!session.connected) {
+        std::cout << "[Client] Not connected.\n";
+        return;
+    }
+
+    send(session.controlSocket, "PASV\r\n", 6, 0);
+    char response[512];
+    int len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
+    response[len] = '\0';
+    std::cout << "[Server] " << response;
+
+    int h1, h2, h3, h4, p1, p2;
+    sscanf_s(response, "227 Entering Passive Mode (%d,%d,%d,%d,%d,%d)", &h1, &h2, &h3, &h4, &p1, &p2);
+    int port = p1 * 256 + p2;
+    std::string ip = std::to_string(h1) + "." + std::to_string(h2) + "." + std::to_string(h3) + "." + std::to_string(h4);
+
+    SOCKET dataSocket = socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in dataAddr{};
+    dataAddr.sin_family = AF_INET;
+    dataAddr.sin_port = htons(port);
+    inet_pton(AF_INET, ip.c_str(), &dataAddr.sin_addr);
+    connect(dataSocket, (sockaddr*)&dataAddr, sizeof(dataAddr));
+
+    std::string cmd = "RETR " + remoteFile + "\r\n";
+    send(session.controlSocket, cmd.c_str(), cmd.length(), 0);
+    len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
+    response[len] = '\0';
+    std::cout << "[Server] " << response;
+
+    std::ofstream file(localFile, std::ios::binary);
+    char buffer[4096];
+    while ((len = recv(dataSocket, buffer, sizeof(buffer), 0)) > 0) {
+        file.write(buffer, len);
+    }
+    file.close();
+    closesocket(dataSocket);
+
+    len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
+    response[len] = '\0';
+    std::cout << "[Server] " << response;
+}
+
+void handle_mget(FtpSession& session, const std::vector<std::string>& files) {
+    for (const auto& file : files) {
+        if (confirm_prompt(file)) {
+            handle_get(session, file, file);
+        }
+    }
+}
+
+// Biến toàn cục để bật/tắt chế độ xác nhận khi truyền nhiều file
+bool prompt_enabled = true;
+
+// Hàm xác nhận từ người dùng trước khi truyền từng file
+bool confirm_prompt(const std::string& filename) {
+    if (!prompt_enabled) return true; // Nếu prompt bị tắt, luôn cho phép
+    std::string answer;
+    std::cout << "Transfer file \"" << filename << "\"? (y/n): ";
+    std::getline(std::cin, answer);
+    return (answer == "y" || answer == "Y"); // Trả về true nếu người dùng đồng ý
+}
+
+// Hàm xử lý lệnh prompt từ người dùng: bật/tắt xác nhận
+void handle_prompt(const std::string& arg) {
+    if (arg == "on") {
+        prompt_enabled = true;
+        std::cout << "[Client] Prompt enabled.\n";
+    }
+    else if (arg == "off") {
+        prompt_enabled = false;
+        std::cout << "[Client] Prompt disabled.\n";
+    }
+    else {
+        std::cout << "[Client] Usage: prompt on|off\n"; // Hướng dẫn sử dụng
+    }
+}
+
+// Hàm gửi đủ 'len' byte dữ liệu qua socket 's'
+bool sendAll(SOCKET s, const char* buf, int64_t len) {
+    int64_t total = 0;
+    while (total < len) {
+        int ret = send(s, buf + total, (int)(len - total), 0);
+        if (ret <= 0) return false; // Lỗi khi gửi
+        total += ret;
+    }
+    return true; // Gửi thành công toàn bộ dữ liệu
+}
+
+bool scan_file_with_clamav(const std::string& filepath) {
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == INVALID_SOCKET) {
+        std::cerr << "[ClamAV] Failed to create socket.\n";
+        return false;
+    }
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(9000);
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+
+    if (connect(sock, (sockaddr*)&addr, sizeof(addr)) != 0) {
+        std::cerr << "[ClamAV] Cannot connect to ClamAV Agent.\n";
+        closesocket(sock);
+        return false;
+    }
+
+    std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+    if (!file) {
+        std::cerr << "[ClamAV] Cannot open file for scanning.\n";
+        closesocket(sock);
+        return false;
+    }
+
+    uint64_t size = file.tellg();
+    file.seekg(0);
+    std::string filename = std::filesystem::path(filepath).filename().string();
+
+    // Gửi tên file
+    uint32_t nameLen = htonl((uint32_t)filename.size());
+    send(sock, (char*)&nameLen, sizeof(nameLen), 0);
+    send(sock, filename.c_str(), (int)filename.size(), 0);
+
+    // Gửi kích thước file
+    uint32_t high = htonl((uint32_t)(size >> 32));
+    uint32_t low = htonl((uint32_t)(size & 0xFFFFFFFF));
+    send(sock, (char*)&high, sizeof(high), 0);
+    send(sock, (char*)&low, sizeof(low), 0);
+
+    // Gửi nội dung file
+    char buffer[4096];
+    while (!file.eof()) {
+        file.read(buffer, sizeof(buffer));
+        send(sock, buffer, (int)file.gcount(), 0);
+    }
+
+    // Nhận kết quả
+    char result[16] = {};
+    recv(sock, result, sizeof(result) - 1, 0);
+    closesocket(sock);
+
+    return std::string(result) == "OK";
+}
+
 // 3. Session management
 
 // Hàm kết nối đến FTP server
