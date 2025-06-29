@@ -4,6 +4,11 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <vector>
+#include <fstream>
+#include <filesystem>
+
+
 
 // Cấu trúc lưu trạng thái phiên FTP
 struct FtpSession {
@@ -23,10 +28,21 @@ void handle_delete(FtpSession& session, const std::string& filename); //Delete a
 void handle_rename(FtpSession& session, const std::string& oldname, const std::string& newname); //Rename a file on the FTP server
 
 // 2. Upload and download
+void handle_put(FtpSession& session, const std::string& localFile, const std::string& remoteFile); // Upload 1 file (with virus scan)
+void handle_mput(FtpSession& session, const std::vector<std::string>& files); // Upload multiple files (with virus scan)
+void handle_get(FtpSession& session, const std::string& remoteFile, const std::string& localFile); // Download 1 file
+void handle_mget(FtpSession& session, const std::vector<std::string>& files); // Download multiple files
+//  Prompt & Utility
+extern bool prompt_enabled; // extern -> do co the define o nhieu .cpp khac nhau
+bool confirm_prompt(const std::string& filename);
+void handle_prompt(const std::string& arg);// Enable/disable confirmation prompt
+bool sendAll(SOCKET s, const char* buf, int64_t len);
+//  Check file with ClamAV
+bool scan_file_with_clamav(const std::string& filepath);
 
 // 3. Session management
 //ascii,binary
-void handle_status(const FtpSession& session); //Show current session status
+void handle_status(const FtpSession& session); //Showư current session status
 //passive
 
 void handle_open(FtpSession& session, const std::string& ip); //Connect to the FTP server
