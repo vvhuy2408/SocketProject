@@ -2,7 +2,7 @@
 #pragma comment(lib, "ws2_32.lib")
 
 // Cổng điều khiển FTP tiêu chuẩn
-#define FTP_PORT 21
+#define FTP_PORT 9000
 
 // 1. File and Directory Operations
 void handle_ls(FtpSession& session) { 
@@ -161,6 +161,10 @@ void handle_put(FtpSession& session, const std::string& localFile, const std::st
     send(session.controlSocket, "PASV\r\n", 6, 0);
     char response[512];
     int len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
+    if (len <= 0) {
+        std::cerr << "[Client] Failed to receive PASV response.\n";
+        return;
+    }
     response[len] = '\0';
     std::cout << "[Server] " << response;
 
@@ -174,14 +178,24 @@ void handle_put(FtpSession& session, const std::string& localFile, const std::st
     dataAddr.sin_family = AF_INET;
     dataAddr.sin_port = htons(port);
     inet_pton(AF_INET, ip.c_str(), &dataAddr.sin_addr);
-    connect(dataSocket, (sockaddr*)&dataAddr, sizeof(dataAddr));
+    if (connect(dataSocket, (sockaddr*)&dataAddr, sizeof(dataAddr)) != 0) {
+        std::cerr << "[Client] Cannot connect to data socket.\n";
+        closesocket(dataSocket);
+        return;
+    }
 
     std::string cmd = "STOR " + remoteFile + "\r\n";
     send(session.controlSocket, cmd.c_str(), cmd.length(), 0);
     len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
+    if (len <= 0) {
+        std::cerr << "[Client] No response after STOR command.\n";
+        closesocket(dataSocket);
+        return;
+    }
     response[len] = '\0';
     std::cout << "[Server] " << response;
 
+    // Gửi file
     std::ifstream file(localFile, std::ios::binary);
     char buffer[4096];
     while (file.read(buffer, sizeof(buffer))) {
@@ -193,9 +207,17 @@ void handle_put(FtpSession& session, const std::string& localFile, const std::st
     file.close();
     closesocket(dataSocket);
 
+    //Nhận thông báo kết thúc từ server
     len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
-    response[len] = '\0';
-    std::cout << "[Server] " << response;
+    if (len <= 0) {
+        std::cerr << "[Client] Lost connection or no response after file upload.\n";
+    }
+    else {
+        response[len] = '\0';
+        std::cout << "[Server] " << response;
+    }
+
+    std::cout << "[DEBUG] Done handle_put()\n";  // Kiểm tra client có về vòng lặp không
 }
 
 void handle_mput(FtpSession& session, const std::vector<std::string>& files) {
@@ -377,13 +399,13 @@ void handle_open(FtpSession& session, const std::string& ip) {
         session.connected = true;
         std::cout << "[Client] Connected to " << ip << "\n";
 
-        // Nhận dòng chào từ server
-        char buffer[512] = { 0 };
-        int len = recv(session.controlSocket, buffer, sizeof(buffer) - 1, 0);
-        if (len > 0) {
-            buffer[len] = '\0';
-            std::cout << "[Server]: " << buffer;
-        }
+        //// Nhận dòng chào từ server
+        //char buffer[512] = { 0 };
+        //int len = recv(session.controlSocket, buffer, sizeof(buffer) - 1, 0);
+        //if (len > 0) {
+        //    buffer[len] = '\0';
+        //    std::cout << "[Server]: " << buffer;
+        //}
     }
     else {
         std::cerr << "[Client] Connection failed.\n";
@@ -414,12 +436,34 @@ void handle_status(const FtpSession& session) {
 
 // Hàm hiển thị danh sách lệnh hỗ trợ
 void handle_help() {
-    std::cout << "Command:\n";
-    std::cout << "open <ip>     - Connect to FTP server\n";
-    std::cout << "close         - Disconnect to FTP server\n";
-    std::cout << "status        - Show current session status\n";
-    std::cout << "help / ?      - Show help text for commands\n";
-    std::cout << "quit / bye    - Exit the FTP client\n";
+    std::cout << "\nAvailable commands:\n";
+
+    std::cout << "\n--- Session management ---\n";
+    std::cout << "  open <ip>             Connect to FTP server\n";
+    std::cout << "  close                 Disconnect from server\n";
+    std::cout << "  status                Show connection status\n";
+    std::cout << "  quit / bye            Exit the FTP client\n";
+    std::cout << "  help / ?              Show this help message\n";
+
+    std::cout << "\n--- File and directory operations ---\n";
+    std::cout << "  ls                    List files/folders on the server\n";
+    std::cout << "  cd <dir>              Change current directory\n";
+    std::cout << "  pwd                   Show current directory on server\n";
+    std::cout << "  mkdir <dir>           Create directory on the server\n";
+    std::cout << "  rmdir <dir>           Remove directory from the server\n";
+    std::cout << "  delete <file>         Delete a file on the server\n";
+    std::cout << "  rename <old> <new>    Rename a file on the server\n";
+
+    std::cout << "\n--- File transfers ---\n";
+    std::cout << "  put <local> <remote>  Upload a file (with virus scan)\n";
+    std::cout << "  mput <file1> [...]    Upload multiple files\n";
+    std::cout << "  get <remote> <local>  Download a file\n";
+    std::cout << "  mget <file1> [...]    Download multiple files\n";
+
+    std::cout << "\n--- Prompt & scan options ---\n";
+    std::cout << "  prompt [on|off]       Enable/disable confirmation before mput/mget\n";
+
+    std::cout << std::endl;
 }
 
 // Hàm thoát chương trình
