@@ -128,10 +128,6 @@
       <LanguageStandard Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">stdcpp17</LanguageStandard>
     </ClCompile>
     <ClCompile Include="ftp_client.cpp" />
-    <ClCompile Include="ftp_clientMain.cpp" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="ftp_client.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -21,13 +21,5 @@
     <ClCompile Include="clamav_agent.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="ftp_clientMain.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="ftp_client.h">
-      <Filter>Source Files</Filter>
-    </ClInclude>
   </ItemGroup>
 </Project>
