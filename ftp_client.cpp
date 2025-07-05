@@ -592,6 +592,8 @@ void handle_help() {
     std::cout << "  mput <file1> [...]    Upload multiple files\n";
     std::cout << "  get <remote> <local>  Download a file\n";
     std::cout << "  mget <file1> [...]    Download multiple files\n";
+    std::cout << "  recv <remote> <local> Download a file\n";
+
 
     std::cout << "\n--- Prompt & scan options ---\n";
     std::cout << "  prompt [on|off]       Enable/disable confirmation before mput/mget\n";
@@ -716,7 +718,7 @@ int main() {
             while (iss >> file) files.push_back(file);
             handle_mput(session, files);
         }
-        else if (cmd == "get") {
+        else if (cmd == "get" || cmd == "recv") {
             std::string remoteFile, localFile;
             iss >> remoteFile >> localFile;
             handle_get(session, remoteFile, localFile);
