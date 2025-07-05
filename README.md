@@ -127,6 +127,91 @@ ftp> put clean.txt clean.txt
 
 ---
 
+## 4. FTP Client Usage
+1. Connect to FTP server
+```
+ftp> open 127.0.0.1
+[Client] Connected to 127.0.0.1
+[Server] 220-FileZilla Server 1.10.3
+220 Please visit https://filezilla-project.org/
+ftp> user test1
+[Server] 331 Please, specify the password.
+ftp> pass 123456
+[Server] 230 Login successful.
+```
+
+2. Upload file to FTP server
+```
+ftp> put safe.txt safe.txt
+[Server] 227 Entering Passive Mode (127,0,0,1,217,70)
+[Server] 150 About to start data transfer.
+[Server] 226 Operation successful
+[DEBUG] Done handle_put()
+```
+
+FileZilla log:
+```
+STOR safe.txt
+150 About to start data transfer.
+226 Operation successful
+```
+
+3. Run ClamAV scan before upload file. (Expected output after upload)
+```
+C:\Users\Admin\source\repos\SocketProject\clamav_agent.exe
+C:\Users\Admin\source\repos\SocketProject\temp\safe.txt: OK
+```
+
+4. Upload multiple files
+```
+Transfer file "safe1.txt"? (y/n): y
+[Server] 227 Entering Passive Mode (127,0,0,1,213,206)
+[Server] 150 About to start data transfer.
+[Server] 226 Operation successful
+[DEBUG] Done handle_put()
+
+Transfer file "safe2.txt"? (y/n): y
+[Server] 227 Entering Passive Mode (127,0,0,1,247,6)
+[Server] 150 About to start data transfer.
+[Server] 226 Operation successful
+[DEBUG] Done handle_put()
+```
+
+ClamAV.exe:
+```
+C:\Users\Admin\source\repos\SocketProject\clamav_agent.exe
+C:\Users\Admin\source\repos\SocketProject\temp\safe1.txt: OK
+C:\Users\Admin\source\repos\SocketProject\temp\safe2.txt: OK
+```
+5. List files on server
+```
+ftp> ls
+[Server] 227 Entering Passive Mode (127,0,0,1,201,123)
+[Server] 150 Starting data transfer.
+-rw-rw-rw- 1 ftp ftp 5 Jul 05 10:10 safe.txt
+-rw-rw-rw- 1 ftp ftp 5 Jul 05 13:43 safe1.txt
+-rw-rw-rw- 1 ftp ftp 5 Jul 05 13:44 safe2.txt
+[Server] 226 Operation successful
+```
+
+6. Create folder on server
+```
+ftp> mkdir folder1
+[Server] 257 "/folder1" created successfully.
+```
+
+7. Change to new directory
+```
+ftp> cd folder1
+[Server] 250 CWD command successful
+```
+
+8. Check current directory
+```
+ftp> pwd
+[Server] 257 "/folder1" is current directory.
+```
+---
 ### Notes
 
 - You do not need to run ClamAV as a background service.
