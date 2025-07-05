@@ -22,8 +22,9 @@ This project comprises two standalone programs:
 
 ```
 # In MSYS2/MinGW or CMD with g++
-g++ -std=c++17 -o clamav_agent.exe clamav_agent.cpp -lws2_32
-g++ -std=c++17 -o ftp_client.exe ftp_client_main.cpp ftp_client.cpp -lws2_32
+g++ -std=c++17 -o clamav_agent clamav_agent.cpp -lws2_32
+g++ -std=c++17 -o ftp_client ftp_client.cpp -lws2_32
+
 ```
 
 ### Run
@@ -65,13 +66,13 @@ g++ -std=c++17 -o ftp_client.exe ftp_client_main.cpp ftp_client.cpp -lws2_32
 
 4. **Enable Passive Mode (for data transfers):**
    - Go to `Edit → Settings → Passive Mode Settings`
-   - Choose: **Use custom port range** → `50000–51000`
+   - Choose: **Use custom port range** → `49152–65534`
    - Select: **Use the following IP** → Enter local IP (e.g. `192.168.1.10`)
      - Find IP using: `ipconfig`
 
 5. **Firewall Rules:**
-   - Ensure ports **21**, **50000–51000** are allowed in Windows Defender Firewall:
-     - Inbound rules → add rule for TCP, allow ports 21 and 50000–51000
+   - Ensure ports **21**, **49152–65534** are allowed in Windows Defender Firewall:
+     - Inbound rules → add rule for TCP, allow ports 21 and 49152–65534
    - Also allow `FileZilla Server.exe` to communicate on private networks
 
 6. **Start Server**
@@ -85,7 +86,7 @@ g++ -std=c++17 -o ftp_client.exe ftp_client_main.cpp ftp_client.cpp -lws2_32
 From your `ftp_client.exe`:
 ```text
 ftp> open 127.0.0.1
-ftp> put clean.txt
+ftp> put clean.txt clean.txt
 ```
 
 ## 3. ClamAV Installation and Configuration
