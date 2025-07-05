@@ -1,4 +1,4 @@
-﻿#pragma once
+﻿//#pragma once
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <iostream>
@@ -7,8 +7,6 @@
 #include <vector>
 #include <fstream>
 #include <filesystem>
-
-
 
 // Cấu trúc lưu trạng thái phiên FTP
 struct FtpSession {
@@ -21,7 +19,148 @@ struct FtpSession {
 #pragma comment(lib, "ws2_32.lib")
 
 // Cổng điều khiển FTP tiêu chuẩn
-#define FTP_PORT 9000
+#define FTP_PORT 21
+
+//  Check file with ClamAV
+bool scan_file_with_clamav(const std::string& filepath) {
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == INVALID_SOCKET) {
+        std::cerr << "[ClamAV] Failed to create socket.\n";
+        return false;
+    }
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(9000);
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+
+    if (connect(sock, (sockaddr*)&addr, sizeof(addr)) != 0) {
+        std::cerr << "[ClamAV] Cannot connect to ClamAV Agent.\n";
+        closesocket(sock);
+        return false;
+    }
+
+    std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+    if (!file) {
+        std::cerr << "[ClamAV] Cannot open file for scanning.\n";
+        closesocket(sock);
+        return false;
+    }
+
+    uint64_t size = file.tellg();
+    file.seekg(0);
+    std::string filename = std::filesystem::path(filepath).filename().string();
+
+    // Gửi tên file
+    uint32_t nameLen = htonl((uint32_t)filename.size());
+    send(sock, (char*)&nameLen, sizeof(nameLen), 0);
+    send(sock, filename.c_str(), (int)filename.size(), 0);
+
+    // Gửi kích thước file
+    uint32_t high = htonl((uint32_t)(size >> 32));
+    uint32_t low = htonl((uint32_t)(size & 0xFFFFFFFF));
+    send(sock, (char*)&high, sizeof(high), 0);
+    send(sock, (char*)&low, sizeof(low), 0);
+
+    // Gửi nội dung file
+    char buffer[4096];
+    while (!file.eof()) {
+        file.read(buffer, sizeof(buffer));
+        send(sock, buffer, (int)file.gcount(), 0);
+    }
+
+    // Nhận kết quả
+    char result[16] = {};
+    recv(sock, result, sizeof(result) - 1, 0);
+    closesocket(sock);
+
+    return std::string(result) == "OK";
+}
+// Hàm gửi đủ 'len' byte dữ liệu qua socket 's'
+bool sendAll(SOCKET s, const char* buf, int64_t len) {
+    int64_t total = 0;
+    while (total < len) {
+        int ret = send(s, buf + total, (int)(len - total), 0);
+        if (ret <= 0) return false; // Lỗi khi gửi
+        total += ret;
+    }
+    return true; // Gửi thành công toàn bộ dữ liệu
+}
+// Biến toàn cục để bật/tắt chế độ xác nhận khi truyền nhiều file
+bool prompt_enabled = true;
+// Hàm xác nhận từ người dùng trước khi truyền từng file
+bool confirm_prompt(const std::string& filename) {
+    if (!prompt_enabled) return true; // Nếu prompt bị tắt, luôn cho phép
+    std::string answer;
+    std::cout << "Transfer file \"" << filename << "\"? (y/n): ";
+    std::getline(std::cin, answer);
+    return (answer == "y" || answer == "Y"); // Trả về true nếu người dùng đồng ý
+}
+// Helper function for robust PASV response parsing
+bool parse_pasv_response(const char* response, std::string& ip, int& port) {
+    std::cout << "[DEBUG] Full PASV response: " << response << std::endl;
+    
+    // Find the opening parenthesis
+    const char* start = strchr(response, '(');
+    if (!start) {
+        std::cerr << "[Client] Failed to parse PASV - no opening parenthesis found.\n";
+        std::cerr << "[Client] Response was: " << response << std::endl;
+        return false;
+    }
+    
+    // Try to parse the 6 numbers
+    int h1, h2, h3, h4, p1, p2;
+    if (sscanf_s(start, "(%d,%d,%d,%d,%d,%d)", &h1, &h2, &h3, &h4, &p1, &p2) != 6) {
+        std::cerr << "[Client] Failed to parse PASV - could not extract 6 numbers.\n";
+        std::cerr << "[Client] Found text after '(': " << start << std::endl;
+        return false;
+    }
+    
+    // Validate the parsed values
+    if (h1 < 0 || h1 > 255 || h2 < 0 || h2 > 255 || h3 < 0 || h3 > 255 || h4 < 0 || h4 > 255 ||
+        p1 < 0 || p1 > 255 || p2 < 0 || p2 > 255) {
+        std::cerr << "[Client] Invalid PASV values: " << h1 << "," << h2 << "," << h3 << "," << h4 << "," << p1 << "," << p2 << std::endl;
+        return false;
+    }
+    
+    // Build IP and port
+    port = p1 * 256 + p2;
+    ip = std::to_string(h1) + "." + std::to_string(h2) + "." + std::to_string(h3) + "." + std::to_string(h4);
+    
+    std::cout << "[DEBUG] Parsed PASV - IP: " << ip << ", Port: " << port << std::endl;
+    return true;
+}
+// 0. Login user
+void handle_user(FtpSession& session, const std::string& username) {
+    if (!session.connected) {
+        std::cerr << "[Client] Not connected.\n";
+        return;
+    }
+    std::string cmd = "USER " + username + "\r\n";
+    send(session.controlSocket, cmd.c_str(), cmd.length(), 0);
+
+    char response[512];
+    int len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
+    if (len > 0) {
+        response[len] = '\0';
+        std::cout << "[Server] " << response;
+    }
+}
+void handle_pass(FtpSession& session, const std::string& password) {
+    if (!session.connected) {
+        std::cerr << "[Client] Not connected.\n";
+        return;
+    }
+    std::string cmd = "PASS " + password + "\r\n";
+    send(session.controlSocket, cmd.c_str(), cmd.length(), 0);
+
+    char response[512];
+    int len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
+    if (len > 0) {
+        response[len] = '\0';
+        std::cout << "[Server] " << response;
+    }
+}
 
 // 1. File and Directory Operations
 void handle_ls(FtpSession& session) { 
@@ -36,14 +175,19 @@ void handle_ls(FtpSession& session) {
     char response[512];
     int len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
     response[len] = '\0';
+    if (len <= 0) {
+        std::cerr << "[Client] Failed to receive PASV response.\n";
+        return;
+    }
     std::cout << "[Server] " << response;
 
-    // Bước 2: trích IP:PORT từ phản hồi PASV (ví dụ: 227 Entering Passive Mode (h1,h2,h3,h4,p1,p2))
-    int h1, h2, h3, h4, p1, p2;
-    sscanf_s(response, "227 Entering Passive Mode (%d,%d,%d,%d,%d,%d)",
-        &h1, &h2, &h3, &h4, &p1, &p2);
-    int port = p1 * 256 + p2;
-    std::string ip = std::to_string(h1) + "." + std::to_string(h2) + "." + std::to_string(h3) + "." + std::to_string(h4);
+    // Bước 2: trích IP:PORT từ phản hồi PASV - more robust parsing
+    int port;
+    std::string ip;
+    if (!parse_pasv_response(response, ip, port)) {
+        std::cerr << "[Client] Failed to parse PASV response.\n";
+        return;
+    }
 
     // Bước 3: tạo socket data kết nối tới ip:port
     SOCKET dataSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -51,13 +195,19 @@ void handle_ls(FtpSession& session) {
     dataAddr.sin_family = AF_INET;
     dataAddr.sin_port = htons(port);
     inet_pton(AF_INET, ip.c_str(), &dataAddr.sin_addr);
-    connect(dataSocket, (sockaddr*)&dataAddr, sizeof(dataAddr));
+    if (connect(dataSocket, (sockaddr*)&dataAddr, sizeof(dataAddr)) != 0) {
+        std::cerr << "[Client] Cannot connect to data socket.\n";
+        closesocket(dataSocket);
+        return;
+    }
 
     // Bước 4: gửi lệnh LIST
     send(session.controlSocket, "LIST\r\n", 6, 0);
     len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
-    response[len] = '\0';
-    std::cout << "[Server] " << response;
+    if (len > 0) {
+        response[len] = '\0';
+        std::cout << "[Server] " << response;
+    }
 
     // Bước 5: đọc dữ liệu từ data socket
     char buf[1024];
@@ -67,10 +217,12 @@ void handle_ls(FtpSession& session) {
     }
     closesocket(dataSocket);
 
-    // Bước 6: nhận kết thúc từ control socket
+    // Bước 6: nhận kết thúc từ control socket (226)
     len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
-    response[len] = '\0';
-    std::cout << "[Server] " << response;
+    if (len > 0) {
+        response[len] = '\0';
+        std::cout << "[Server] " << response;
+    }
 }
 void handle_cd(FtpSession& session, const std::string& folder) { 
     if (!session.connected) {
@@ -127,7 +279,6 @@ void handle_rmdir(FtpSession& session, const std::string& folder) {
     buffer[len] = '\0';
     std::cout << "[Server] " << buffer;
 }
-
 void handle_delete(FtpSession& session, const std::string& filename) {
     if (!session.connected) {
         std::cout << "[Client] Not connected.\n";
@@ -187,11 +338,27 @@ void handle_put(FtpSession& session, const std::string& localFile, const std::st
     response[len] = '\0';
     std::cout << "[Server] " << response;
 
-    int h1, h2, h3, h4, p1, p2;
-    sscanf_s(response, "227 Entering Passive Mode (%d,%d,%d,%d,%d,%d)", &h1, &h2, &h3, &h4, &p1, &p2);
-    int port = p1 * 256 + p2;
-    std::string ip = std::to_string(h1) + "." + std::to_string(h2) + "." + std::to_string(h3) + "." + std::to_string(h4);
+    // Parse IP, port
+    int port;
+    std::string ip;
+    if (!parse_pasv_response(response, ip, port)) {
+        std::cerr << "[Client] Failed to parse PASV response.\n";
+        return;
+    }
+    std::cout << "[DEBUG] PASV IP: " << ip << ", port: " << port << "\n";
 
+    // Gửi STOR
+    std::string cmd = "STOR " + remoteFile + "\r\n";
+    send(session.controlSocket, cmd.c_str(), cmd.length(), 0);
+    len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
+    if (len <= 0) {
+        std::cerr << "[Client] No response after STOR command.\n";
+        return;
+    }
+    response[len] = '\0';
+    std::cout << "[Server] " << response;
+
+    //Connect data socket
     SOCKET dataSocket = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in dataAddr{};
     dataAddr.sin_family = AF_INET;
@@ -202,17 +369,6 @@ void handle_put(FtpSession& session, const std::string& localFile, const std::st
         closesocket(dataSocket);
         return;
     }
-
-    std::string cmd = "STOR " + remoteFile + "\r\n";
-    send(session.controlSocket, cmd.c_str(), cmd.length(), 0);
-    len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
-    if (len <= 0) {
-        std::cerr << "[Client] No response after STOR command.\n";
-        closesocket(dataSocket);
-        return;
-    }
-    response[len] = '\0';
-    std::cout << "[Server] " << response;
 
     // Gửi file
     std::ifstream file(localFile, std::ios::binary);
@@ -238,7 +394,6 @@ void handle_put(FtpSession& session, const std::string& localFile, const std::st
 
     std::cout << "[DEBUG] Done handle_put()\n";  // Kiểm tra client có về vòng lặp không
 }
-
 void handle_mput(FtpSession& session, const std::vector<std::string>& files) {
     for (const auto& file : files) {
         if (confirm_prompt(file)) {
@@ -246,7 +401,6 @@ void handle_mput(FtpSession& session, const std::vector<std::string>& files) {
         }
     }
 }
-
 void handle_get(FtpSession& session, const std::string& remoteFile, const std::string& localFile) {
     if (!session.connected) {
         std::cout << "[Client] Not connected.\n";
@@ -256,13 +410,20 @@ void handle_get(FtpSession& session, const std::string& remoteFile, const std::s
     send(session.controlSocket, "PASV\r\n", 6, 0);
     char response[512];
     int len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
+    if (len <= 0) {
+        std::cerr << "[Client] Failed to receive PASV response.\n";
+        return;
+    }
     response[len] = '\0';
     std::cout << "[Server] " << response;
 
-    int h1, h2, h3, h4, p1, p2;
-    sscanf_s(response, "227 Entering Passive Mode (%d,%d,%d,%d,%d,%d)", &h1, &h2, &h3, &h4, &p1, &p2);
-    int port = p1 * 256 + p2;
-    std::string ip = std::to_string(h1) + "." + std::to_string(h2) + "." + std::to_string(h3) + "." + std::to_string(h4);
+    // Parse IP, port - more robust parsing
+    int port;
+    std::string ip;
+    if (!parse_pasv_response(response, ip, port)) {
+        std::cerr << "[Client] Failed to parse PASV response.\n";
+        return;
+    }
 
     SOCKET dataSocket = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in dataAddr{};
@@ -289,25 +450,12 @@ void handle_get(FtpSession& session, const std::string& remoteFile, const std::s
     response[len] = '\0';
     std::cout << "[Server] " << response;
 }
-
 void handle_mget(FtpSession& session, const std::vector<std::string>& files) {
     for (const auto& file : files) {
         if (confirm_prompt(file)) {
             handle_get(session, file, file);
         }
     }
-}
-
-// Biến toàn cục để bật/tắt chế độ xác nhận khi truyền nhiều file
-bool prompt_enabled = true;
-
-// Hàm xác nhận từ người dùng trước khi truyền từng file
-bool confirm_prompt(const std::string& filename) {
-    if (!prompt_enabled) return true; // Nếu prompt bị tắt, luôn cho phép
-    std::string answer;
-    std::cout << "Transfer file \"" << filename << "\"? (y/n): ";
-    std::getline(std::cin, answer);
-    return (answer == "y" || answer == "Y"); // Trả về true nếu người dùng đồng ý
 }
 
 // Hàm xử lý lệnh prompt từ người dùng: bật/tắt xác nhận
@@ -325,73 +473,30 @@ void handle_prompt(const std::string& arg) {
     }
 }
 
-// Hàm gửi đủ 'len' byte dữ liệu qua socket 's'
-bool sendAll(SOCKET s, const char* buf, int64_t len) {
-    int64_t total = 0;
-    while (total < len) {
-        int ret = send(s, buf + total, (int)(len - total), 0);
-        if (ret <= 0) return false; // Lỗi khi gửi
-        total += ret;
-    }
-    return true; // Gửi thành công toàn bộ dữ liệu
-}
-
-bool scan_file_with_clamav(const std::string& filepath) {
-    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == INVALID_SOCKET) {
-        std::cerr << "[ClamAV] Failed to create socket.\n";
-        return false;
-    }
-
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(9000);
-    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-
-    if (connect(sock, (sockaddr*)&addr, sizeof(addr)) != 0) {
-        std::cerr << "[ClamAV] Cannot connect to ClamAV Agent.\n";
-        closesocket(sock);
-        return false;
-    }
-
-    std::ifstream file(filepath, std::ios::binary | std::ios::ate);
-    if (!file) {
-        std::cerr << "[ClamAV] Cannot open file for scanning.\n";
-        closesocket(sock);
-        return false;
-    }
-
-    uint64_t size = file.tellg();
-    file.seekg(0);
-    std::string filename = std::filesystem::path(filepath).filename().string();
-
-    // Gửi tên file
-    uint32_t nameLen = htonl((uint32_t)filename.size());
-    send(sock, (char*)&nameLen, sizeof(nameLen), 0);
-    send(sock, filename.c_str(), (int)filename.size(), 0);
-
-    // Gửi kích thước file
-    uint32_t high = htonl((uint32_t)(size >> 32));
-    uint32_t low = htonl((uint32_t)(size & 0xFFFFFFFF));
-    send(sock, (char*)&high, sizeof(high), 0);
-    send(sock, (char*)&low, sizeof(low), 0);
-
-    // Gửi nội dung file
-    char buffer[4096];
-    while (!file.eof()) {
-        file.read(buffer, sizeof(buffer));
-        send(sock, buffer, (int)file.gcount(), 0);
-    }
-
-    // Nhận kết quả
-    char result[16] = {};
-    recv(sock, result, sizeof(result) - 1, 0);
-    closesocket(sock);
-
-    return std::string(result) == "OK";
-}
-
 // 3. Session management
+
+enum TransferMode { ASCII, BINARY };
+TransferMode currentMode = BINARY;
+bool passiveModeEnabled = true;
+
+// Hàm đặt chế độ truyền file thành ASCII (văn bản)
+void handle_ascii() {
+    currentMode = ASCII;
+    std::cout << "[Client] Transfer mode set to ASCII.\n";
+}
+
+// Hàm đặt chế độ truyền file thành BINARY (nhị phân)
+void handle_binary() {
+    currentMode = BINARY;
+    std::cout << "[Client] Transfer mode set to BINARY.\n";
+}
+
+// Hàm chuyển đổi giữa chế độ passive (PASV) và active (PORT)
+void handle_passive() {
+    passiveModeEnabled = !passiveModeEnabled;
+    std::cout << "[Client] Passive mode is now "
+        << (passiveModeEnabled ? "ON (PASV)" : "OFF (PORT)") << ".\n";
+}
 
 // Hàm kết nối đến FTP server
 void handle_open(FtpSession& session, const std::string& ip) {
@@ -418,13 +523,17 @@ void handle_open(FtpSession& session, const std::string& ip) {
         session.connected = true;
         std::cout << "[Client] Connected to " << ip << "\n";
 
-        //// Nhận dòng chào từ server
-        //char buffer[512] = { 0 };
-        //int len = recv(session.controlSocket, buffer, sizeof(buffer) - 1, 0);
-        //if (len > 0) {
-        //    buffer[len] = '\0';
-        //    std::cout << "[Server]: " << buffer;
-        //}
+        // Nhận dòng chào từ server
+        char response[512];
+        int len = recv(session.controlSocket, response, sizeof(response) - 1, 0);
+        if (len > 0) {
+            response[len] = '\0';
+            std::cout << "[Server] " << response;
+        } else {
+            std::cerr << "[Client] Failed to receive greeting from server.\n";
+            closesocket(session.controlSocket);
+            return;
+        }
     }
     else {
         std::cerr << "[Client] Connection failed.\n";
@@ -459,8 +568,13 @@ void handle_help() {
 
     std::cout << "\n--- Session management ---\n";
     std::cout << "  open <ip>             Connect to FTP server\n";
+    std::cout << "  ascii                 Set transfer mode to ASCII (text)\n";
+    std::cout << "  binary                Set transfer mode to BINARY (default)\n";
+    std::cout << "  user <username>       Provide FTP username\n";
+    std::cout << "  pass <password>       Provide FTP password\n";
     std::cout << "  close                 Disconnect from server\n";
     std::cout << "  status                Show connection status\n";
+    std::cout << "  passive               Toggle passive mode (PASV/PORT)\n";
     std::cout << "  quit / bye            Exit the FTP client\n";
     std::cout << "  help / ?              Show this help message\n";
 
@@ -492,10 +606,6 @@ void handle_quit(FtpSession& session) {
     WSACleanup();
     exit(0);
 }
-void hande_bye(FtpSession& session) {
-    handle_quit(session);
-}
-
 
 int main() {
     // Khởi tạo Winsock
@@ -522,7 +632,16 @@ int main() {
         iss >> cmd;
 
         // Session management
-        if (cmd == "open") {
+        if (cmd == "ascii") {
+            handle_ascii();
+        }
+        else if (cmd == "binary") {
+            handle_binary();
+        }
+        else if (cmd == "passive") {
+            handle_passive();
+        }
+        else if (cmd == "open") {
             std::string ip;
             iss >> ip;
             handle_open(session, ip);
@@ -539,6 +658,18 @@ int main() {
         else if (cmd == "help" || cmd == "?") {
             handle_help();
         }
+        // Login user
+        else if (cmd == "user") {
+            std::string username;
+            iss >> username;
+            handle_user(session, username);
+        }
+        else if (cmd == "pass") {
+            std::string password;
+            iss >> password;
+            handle_pass(session, password);
+        }
+
 
         // File and directory operations
         else if (cmd == "ls") {
